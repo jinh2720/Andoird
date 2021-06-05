@@ -1,2 +1,2 @@
-#Android
-# Android
+MLOps와 관련된 소스 코드를 저장하는 리파지토리이다.
+
