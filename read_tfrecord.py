@@ -30,7 +30,7 @@ parsed_image_dataset = raw_image_dataset.map(parse_image_function)
 for image_features in parsed_image_dataset:
     image_raw = image_features['image_raw'].numpy() #  image_raw is expected to 'bytes'
     img = cv2.imdecode(np.frombuffer(image_raw, np.uint8), -1) # img is expected to 'numpy array'
-    height = image_features['height'].numpy() # height is expected to 'numpy array'
-    width = image_features['width'].numpy() # width is expected to 'numpy array'
-    depth = image_features['depth'].numpy() # depth is expected to 'numpy array'
+    height = image_features['height']
+    width = image_features['width']
+    depth = image_features['depth']
     print(height,width,depth)
