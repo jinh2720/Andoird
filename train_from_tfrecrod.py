@@ -1,7 +1,58 @@
 import tensorflow as tf
-from functools import partial
 import matplotlib.pyplot as plt
+from functools import partial
 
+
+
+# read tfrecord file
+train_raw_image_ds = tf.data.TFRecordDataset('train/train.tfrecord')
+valid_raw_image_ds = tf.data.TFRecordDataset('valid/valid.tfrecord')
+
+image_size = (1024,1024)
+batch_size = 4
+
+# option for parsing tfrecord file
+image_feature_description = {
+        'image_raw': tf.io.FixedLenFeature([], tf.string),
+        'label': tf.io.FixedLenFeature([], tf.int64),
+    }
+
+def read_dataset(batch_size, dataset):
+
+    dataset = dataset.map(_parse_image_function)
+    dataset = dataset.prefetch(10)
+    dataset = dataset.shuffle(buffer_size=10 * batch_size)
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+
+    return dataset
+
+def _parse_image_function(example_proto):
+    features = tf.io.parse_single_example(example_proto, image_feature_description)
+    image = tf.image.decode_image(features['image_raw'], channels=3)
+    image = tf.cast(image, tf.float32)
+    image = tf.reshape(image, [*image_size, 3])
+    label = tf.cast(features['label'], tf.int32)
+
+    return image, label
+
+# batch dataset for training
+train_dataset = read_dataset(batch_size, train_raw_image_ds)
+valid_dataset = read_dataset(batch_size, valid_raw_image_ds)
+
+
+# setting options for training
+initial_learning_rate = 0.01
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate, decay_steps=20, decay_rate=0.96, staircase=True
+)
+
+checkpoint_cb = tf.keras.callbacks.ModelCheckpoint(
+    "melanoma_model.h5", save_best_only=True
+)
+
+early_stopping_cb = tf.keras.callbacks.EarlyStopping(
+    patience=10, restore_best_weights=True
+)
 
 try:
     tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
@@ -11,110 +62,41 @@ try:
     strategy = tf.distribute.experimental.TPUStrategy(tpu)
 except:
     strategy = tf.distribute.get_strategy()
-print("Number of replicas:", strategy.num_replicas_in_sync) # Number of replicas : 1
+print("Number of replicas:", strategy.num_replicas_in_sync)
 
 
-AUTOTUNE = tf.data.experimental.AUTOTUNE
-GCS_PATH = "/home/jinh/hdd_1/data/vnn_494/img_split/tfrecord/crv_8_2/cv_0"
-BATCH_SIZE = 4
-IMAGE_SIZE = [1024, 1024]
-
-
-""" Data Load """
-TRAINING_FILENAMES = tf.io.gfile.glob(GCS_PATH + '/train/data/*.tfrecord') # 그런데 여기서 class별로 리스트를 나누질 않았음...
-VALID_FILENAMES = tf.io.gfile.glob(GCS_PATH + '/valid/data/*.tfrecord')
-
-# TEST_FILENAMES = tf.io.gfile.glob(GCS_PATH + "/tfrecords/test*.tfrec")
-print("Train TFRecord Files:", len(TRAINING_FILENAMES))
-print("Validation TFRecord Files:", len(VALID_FILENAMES))
-# print("Test TFRecord Files:", len(TEST_FILENAMES))
-
-
-""" Data Decoding """
-def decode_image(image):
-    # 이미지 정보가 안들어옴..
-    # image = tf.image.decode_jpeg(image, channels=3)
-    test_shape = tf.image.decode_png(image).shape
-    image = tf.image.decode_png(image)
-    image = tf.cast(image, tf.float32)
-    # image = tf.reshape(image, [*IMAGE_SIZE, 3])
-    image = tf.reshape(image, [*IMAGE_SIZE])
-    return image
-
-
-def read_tfrecord(example, labeled):
-    tfrecord_format = (
-        {
-            "image_raw": tf.io.FixedLenFeature([], tf.string),
-            "label": tf.io.FixedLenFeature([], tf.int64),
-        }
-        if labeled
-        else {"image_raw": tf.io.FixedLenFeature([], tf.string),}
+def make_model():
+    base_model = tf.keras.applications.Xception(
+        input_shape=(*image_size, 3), include_top=False, weights="imagenet"
     )
-    example = tf.io.parse_single_example(example, tfrecord_format)
-    # image = decode_image(example["image_raw"])
 
-    return example
+    base_model.trainable = False
 
+    inputs = tf.keras.layers.Input([*image_size, 3])
+    x = tf.keras.applications.xception.preprocess_input(inputs)
+    x = base_model(x)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Dense(8, activation="relu")(x)
+    x = tf.keras.layers.Dropout(0.7)(x)
+    outputs = tf.keras.layers.Dense(1, activation="sigmoid")(x)
 
-#### 참고 ####
-# feature = {
-#     'height': _int64_feature(image_shape[0]),
-#     'width': _int64_feature(image_shape[1]),
-#     'depth': _int64_feature(image_shape[2]),
-#     # 'label': _int64_feature(label),
-#     'label': _bytes_feature(label_to_bytes),
-#     'image_raw': _bytes_feature(image_string),
-# }
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
 
-
-"""Loading 방법 정의"""
-def load_dataset(filenames, labeled=True):
-    ignore_order = tf.data.Options()
-    ignore_order.experimental_deterministic = False  # disable order, increase speed
-    dataset = tf.data.TFRecordDataset(
-        filenames
-    )  # automatically interleaves reads from multiple files
-    dataset = dataset.with_options(
-        ignore_order
-    )  # uses data as soon as it streams in, rather than in its original order
-    dataset = dataset.map(
-        partial(read_tfrecord, labeled=labeled), num_parallel_calls=AUTOTUNE
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule),
+        loss="binary_crossentropy",
+        metrics=tf.keras.metrics.AUC(name="auc"),
     )
-    # returns a dataset of (image, label) pairs if labeled=True or just images if labeled=False
-    return dataset
+
+    return model
 
 
-# 다른 데이터 세트를 얻기 위해 다음 함수를 정의
-def get_dataset(filenames, labeled=True):
-    dataset = load_dataset(filenames, labeled=labeled)
-    dataset = decode_image(dataset)
-    dataset = dataset.shuffle(2048)
-    dataset = dataset.prefetch(buffer_size=AUTOTUNE)
-    dataset = dataset.batch(BATCH_SIZE)
-    return dataset
+with strategy.scope():
+    model = make_model()
 
-
-"""입력 이미지 시각"""
-train_dataset = get_dataset(TRAINING_FILENAMES)
-valid_dataset = get_dataset(VALID_FILENAMES)
-# test_dataset = get_dataset(TEST_FILENAMES, labeled=False)
-
-print('데이터타입: ',type(train_dataset))
-print(train_dataset)
-# print('뭥미?',len(train_dataset))
-image_batch, label_batch = next(iter(train_dataset))
-
-# def show_batch(image_batch, label_batch):
-#     plt.figure(figsize=(10, 10))
-#     for n in range(25):
-#         ax = plt.subplot(5, 5, n + 1)
-#         plt.imshow(image_batch[n] / 255.0)
-#         if label_batch[n]:
-#             plt.title("MALIGNANT")
-#         else:
-#             plt.title("BENIGN")
-#         plt.axis("off")
-#
-#
-# show_batch(image_batch.numpy(), label_batch.numpy())
+history = model.fit(
+    train_dataset,
+    epochs=10,
+    validation_data=valid_dataset,
+    callbacks=[checkpoint_cb, early_stopping_cb],
+)
