@@ -1,6 +1,4 @@
 import tensorflow as tf
-import matplotlib.pyplot as plt
-from functools import partial
 from tensorflow.keras.applications.densenet import preprocess_input
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '3'
@@ -11,6 +9,7 @@ train_raw_image_ds = tf.data.TFRecordDataset('train/tfrecord/train.tfrecord')
 valid_raw_image_ds = tf.data.TFRecordDataset('valid/tfrecord/valid.tfrecord')
 
 image_size = (800,800)
+tratget_size = (224,224)
 batch_size = 4
 
 # option for parsing tfrecord file
@@ -22,9 +21,10 @@ image_feature_description = {
 def read_dataset(batch_size, dataset):
 
     dataset = dataset.map(_parse_image_function)
-    dataset = dataset.prefetch(10)
-    dataset = dataset.shuffle(buffer_size=10 * batch_size)
-    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.shuffle(buffer_size=100000, seed=None, reshuffle_each_iteration=None) # lager than full data size 
+    dataset = dataset.repeat(count=None) # repeatly data suffling per epoch
+    dataset = dataset.batch(batch_size, drop_remainder=True) # Learning in batchs
+    dataset = dataset.prefetch(2) # prepare next data in advance 
 
     return dataset
 
@@ -33,6 +33,7 @@ def _parse_image_function(example_proto):
     image = tf.image.decode_image(features['image_raw'], channels=3)
     image = tf.cast(image, tf.float32)
     image = tf.reshape(image, [*image_size, 3])
+    image = tf.image.resize(image, tratget_size, method='bicubic')
     label = tf.cast(features['label'], tf.int32)
 
     return image, label
@@ -40,6 +41,9 @@ def _parse_image_function(example_proto):
 # batch dataset for training
 train_dataset = read_dataset(batch_size, train_raw_image_ds)
 valid_dataset = read_dataset(batch_size, valid_raw_image_ds)
+
+print('Train set:',train_dataset)
+print('Valid set:',train_dataset)
 
 
 # setting options for training
@@ -49,11 +53,21 @@ lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
 )
 
 checkpoint_cb = tf.keras.callbacks.ModelCheckpoint(
-    "melanoma_model.h5", save_best_only=True
+    "./melanoma_model.h5",
+    monitor='val_loss',
+    save_best_only=True,
+    verbose=1,
+    save_weights_only=False,
+    mode='auto',
+    period=1
 )
 
 early_stopping_cb = tf.keras.callbacks.EarlyStopping(
-    patience=10, restore_best_weights=True
+    patience=10,
+    restore_best_weights=True,
+    min_delta=0,
+    verbose=1,
+    mode='auto'
 )
 
 
@@ -63,11 +77,11 @@ def make_model():
         include_top=False,
         weights="imagenet",
         input_tensor=None,
-        input_shape=(*image_size, 3),
+        input_shape=(*tratget_size, 3),
         pooling=None
     )
     base_model.trainable = False
-    inputs = tf.keras.layers.Input([*image_size, 3])
+    inputs = tf.keras.layers.Input([*tratget_size, 3])
     x = preprocess_input(inputs)
     x = base_model(x)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
@@ -78,7 +92,7 @@ def make_model():
     model.compile(
                   loss = 'binary_crossentropy',
                   optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule),
-                  metrics = tf.keras.metrics.Accuracy(name="accuracy")
+                  metrics = ['accuracy']
     )
 
     return model
