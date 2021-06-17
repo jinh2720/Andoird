@@ -19,10 +19,9 @@ image_feature_description = {
     }
 
 def read_dataset(batch_size, dataset):
-
     dataset = dataset.map(_parse_image_function)
     dataset = dataset.shuffle(buffer_size=100000, seed=None, reshuffle_each_iteration=None) # lager than full data size 
-    dataset = dataset.repeat(count=None) # repeatly data suffling per epoch
+    # dataset = dataset.repeat(count=None) # repeatly data suffling per epoch
     dataset = dataset.batch(batch_size, drop_remainder=True) # Learning in batchs
     dataset = dataset.prefetch(2) # prepare next data in advance 
 
@@ -33,8 +32,15 @@ def _parse_image_function(example_proto):
     image = tf.image.decode_image(features['image_raw'], channels=3)
     image = tf.cast(image, tf.float32)
     image = tf.reshape(image, [*image_size, 3])
-    image = tf.image.resize(image, tratget_size, method='bicubic')
+    # image = tf.image.resize(image, tratget_size, method='bicubic')
     label = tf.cast(features['label'], tf.int32)
+
+    return image, label
+
+def image_augment():
+    image = tf.image.rot90(image,k=1)
+    image = tf.image.random_brightness(image, max_delta=60)
+    image = tf.image.resize(image, tratget_size, method='bicubic')
 
     return image, label
 
