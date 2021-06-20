@@ -5,11 +5,6 @@ import os
 import glob
 os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
-image_size = (800,800)
-tratget_size = (456,456)
-batch_size = 8
-eopch_num = 50
-
 # option for parsing tfrecord file
 image_feature_description = {
         'height': tf.io.FixedLenFeature([],tf.int64),
@@ -37,12 +32,17 @@ def _parse_image_function(example_proto):
     image.set_shape([*image_size, 3])
 
     label = tf.cast(features['label'], tf.string)
+    label = _parse_label(label,class_num)
+    
+    return image, label
+
+def _parse_label(label,class_num):
     if label == 'cat':
         label = 0
     else:
         label = 1
-    return image, label
-
+    label = tf.one_hot(label, class_num)
+    return label
 
 # Data augmentation
 def image_augment(image, label):
@@ -51,11 +51,6 @@ def image_augment(image, label):
     image = tf.image.resize(image, tratget_size, method='bicubic')
 
     return image, label
-
-
-# root directory
-base_dir = '/home/jinh/PycharmProjects/Radisen/03_Train_Efficientnet/viet_base/learning/vnn/vnn_add_may/hessel_only/resize_800/'
-train_class=['cat','dog']
 
 
 # collecting train files 
@@ -78,15 +73,6 @@ def config_dataset(train_class,base_dir):
     valid_record = tf.data.TFRecordDataset(valid_ds_list)
 
     return train_record, valid_record, train_data_size
-
-
-# dataset to use for training
-train_record, valid_record, train_data_size = config_dataset(train_class,base_dir)
-
-
-# batch dataset for training
-train_dataset = read_dataset(batch_size, train_record)
-valid_dataset = read_dataset(batch_size, valid_record)
 
 
 # setting options for training
@@ -113,8 +99,11 @@ early_stopping_cb = tf.keras.callbacks.EarlyStopping(
     mode='auto'
 )
 
+# directory for logging
+save_base_dir = os.getcwd()
 log_dir = os.path.join(save_base_dir,'log_dir','fit')
 save_log_dir = log_dir + '/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
 tensorboard_cb = tf.keras.callbacks.TensorBoard(log_dir=save_log_dir)
 
 def make_model():
@@ -132,7 +121,7 @@ def make_model():
     x = base_model(x)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     x = tf.keras.layers.Dropout(0.425)(x)
-    output = tf.keras.layers.Dense(1,activation='sigmoid')(x)
+    output = tf.keras.layers.Dense(2,activation='softmax')(x)
     model = tf.keras.models.Model(inputs=[inputs],outputs=[output])
 
     model.compile(
@@ -144,12 +133,32 @@ def make_model():
     return model
 
 
-model = make_model()
+if __name__ == '__main__':
 
-history = model.fit(
-    train_dataset,
-    epochs=eopch_num,
-    validation_data=valid_dataset,
-    verbose=1,
-    callbacks=[checkpoint_cb, early_stopping_cb, tensorboard_cb],
-)
+    # params setting
+    image_size = (800,800)
+    tratget_size = (456,456)
+    batch_size = 8
+    eopch_num = 50
+
+    # root directory
+    base_dir = '/my_directory'
+    train_class=['cat','dog']
+    class_num = len(train_class)
+
+    # dataset to use for training
+    train_record, valid_record, train_data_size = config_dataset(train_class,base_dir)
+
+    # batch dataset for training
+    train_dataset = read_dataset(batch_size, train_record)
+    valid_dataset = read_dataset(batch_size, valid_record)
+
+    model = make_model()
+
+    history = model.fit(
+        train_dataset,
+        epochs=eopch_num,
+        validation_data=valid_dataset,
+        verbose=1,
+        callbacks=[checkpoint_cb, early_stopping_cb, tensorboard_cb],
+    )
