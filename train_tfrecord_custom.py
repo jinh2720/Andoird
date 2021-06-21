@@ -16,10 +16,11 @@ image_feature_description = {
 
 def read_dataset(batch_size, dataset):
     dataset = dataset.map(_parse_image_function)
-    dataset = dataset.map(image_augment)
+    # dataset = dataset.map(image_augment)
     dataset = dataset.shuffle(train_data_size)
     dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.repeat(count=eopch_num)
+    # dataset = dataset.repeat(count=eopch_num)
+    dataset = dataset.cache()
     dataset = dataset.prefetch(2)
 
     return dataset
@@ -28,8 +29,10 @@ def _parse_image_function(example_proto):
     features = tf.io.parse_single_example(example_proto, image_feature_description)
     image = tf.image.decode_image(features['image_raw'], channels=3)
     image = tf.cast(image, tf.float32)
+    image = preprocess_input(image)
     image = tf.reshape(image, [*image_size, 3])
     image.set_shape([*image_size, 3])
+    
 
     label = tf.cast(features['label'], tf.string)
     label = _parse_label(label,class_num)
@@ -115,14 +118,12 @@ def make_model():
         input_shape=(*tratget_size, 3),
         pooling=None
     )
-    base_model.trainable = False
-    inputs = tf.keras.layers.Input([*tratget_size, 3])
-    x = preprocess_input(inputs)
-    x = base_model(x)
+    base_model.trainable = True
+    x = base_model.output
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     x = tf.keras.layers.Dropout(0.425)(x)
     output = tf.keras.layers.Dense(2,activation='softmax')(x)
-    model = tf.keras.models.Model(inputs=[inputs],outputs=[output])
+    model = tf.keras.models.Model(inputs=[base_model.input],outputs=[output])
 
     model.compile(
                   loss = 'binary_crossentropy',
