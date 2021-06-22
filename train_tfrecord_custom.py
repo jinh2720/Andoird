@@ -14,9 +14,10 @@ image_feature_description = {
         'label': tf.io.FixedLenFeature([], tf.string),
     }
 
-def read_dataset(batch_size, dataset):
+def read_dataset(batch_size, dataset, ds_type):
     dataset = dataset.map(_parse_image_function)
-    # dataset = dataset.map(image_augment)
+    if ds_type == 'train':
+        dataset = dataset.map(image_augment)
     dataset = dataset.shuffle(train_data_size)
     dataset = dataset.batch(batch_size, drop_remainder=True)
     # dataset = dataset.repeat(count=eopch_num)
@@ -51,7 +52,7 @@ def _parse_label(label,class_num):
 def image_augment(image, label):
     image = tf.image.rot90(image,k=1)
     image = tf.image.random_brightness(image, max_delta=60)
-    image = tf.image.resize(image, tratget_size, method='bicubic')
+    image = tf.image.resize(image, traget_size, method='bicubic')
 
     return image, label
 
@@ -115,7 +116,7 @@ def make_model():
         include_top=False,
         weights="imagenet",
         input_tensor=None,
-        input_shape=(*tratget_size, 3),
+        input_shape=(*traget_size, 3),
         pooling=None
     )
     base_model.trainable = True
@@ -138,7 +139,7 @@ if __name__ == '__main__':
 
     # params setting
     image_size = (800,800)
-    tratget_size = (456,456)
+    traget_size = (456,456)
     batch_size = 8
     eopch_num = 50
 
@@ -151,8 +152,8 @@ if __name__ == '__main__':
     train_record, valid_record, train_data_size = config_dataset(train_class,base_dir)
 
     # batch dataset for training
-    train_dataset = read_dataset(batch_size, train_record)
-    valid_dataset = read_dataset(batch_size, valid_record)
+    train_dataset = read_dataset(batch_size, train_record, ds_type='tarin')
+    valid_dataset = read_dataset(batch_size, valid_record, ds_type='valid')
 
     model = make_model()
 
